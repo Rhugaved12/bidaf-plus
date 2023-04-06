@@ -44,6 +44,7 @@ class SQuAD(data.Dataset):
     def __init__(self, data_path, use_v2=True):
         super(SQuAD, self).__init__()
 
+        # load teh dataset generated/processed by setup.py
         dataset = np.load(data_path)
         self.context_idxs = torch.from_numpy(dataset['context_idxs']).long()
         self.context_char_idxs = torch.from_numpy(dataset['context_char_idxs']).long()
@@ -54,6 +55,11 @@ class SQuAD(data.Dataset):
 
         if use_v2:
             # SQuAD 2.0: Use index 0 for no-answer token (token 1 = OOV)
+            # Here we add the token 1 for each example to represent no-answer token
+            # It would look like this for a batch size of 2:
+            #     [[  1  23  45  67   0   0   0   0   0   0   0]
+            #     [  1  89  12  34  56  78  90   0   0   0   0]]
+
             batch_size, c_len, w_len = self.context_char_idxs.size()
             ones = torch.ones((batch_size, 1), dtype=torch.int64)
             self.context_idxs = torch.cat((ones, self.context_idxs), dim=1)
@@ -63,10 +69,12 @@ class SQuAD(data.Dataset):
             self.context_char_idxs = torch.cat((ones, self.context_char_idxs), dim=1)
             self.question_char_idxs = torch.cat((ones, self.question_char_idxs), dim=1)
 
+            # We also increament the starting and ending index of answers to account for no-answer token
             self.y1s += 1
             self.y2s += 1
 
         # SQuAD 1.1: Ignore no-answer examples
+        # We basically create SQUAD 1.1 from 2.0 by igonring non-answerable questions
         self.ids = torch.from_numpy(dataset['ids']).long()
         self.valid_idxs = [idx for idx in range(len(self.ids))
                            if use_v2 or self.y1s[idx].item() >= 0]
@@ -104,6 +112,33 @@ def collate_fn(examples):
     Adapted from:
         https://github.com/yunjey/seq2seq-dataloader
     """
+
+    """
+    The collate_fn function is used to create batch tensors from a list of individual examples returned by the SQuAD.__getitem__ method. 
+    It merges examples of different length by padding all examples to the maximum length in the batch.
+
+    The function defines three inner functions: merge_0d, merge_1d, and merge_2d, which are used to merge tensors of different dimensions.
+
+    The merge_0d function merges 0-dimensional tensors (i.e., scalars). It takes a list of scalars, 
+    and returns a tensor of dtype torch.int64 with shape (len(scalars),) containing the values of the input scalars.
+
+    The merge_1d function merges 1-dimensional tensors. It takes a list of 1-dimensional tensors, 
+    a dtype torch.int64, and a pad_value (default 0). It computes the maximum length of the tensors 
+    in the list, and creates a tensor of shape (len(arrays), max_length) with all elements initialized 
+    to pad_value. It then fills in the tensor with the values from the input tensors up to their respective lengths, 
+    and returns the resulting tensor.
+
+    The merge_2d function merges 2-dimensional tensors. It takes a list of 2-dimensional tensors, 
+    a dtype torch.int64, and a pad_value (default 0). It computes the maximum height and width of 
+    the tensors in the list, and creates a tensor of shape (len(matrices), max_height, max_width) 
+    with all elements initialized to pad_value. It then fills in the tensor with the values from 
+    the input tensors up to their respective heights and widths, and returns the resulting tensor.
+
+    The function then groups the input examples by tensor type (i.e., context_idxs, context_char_idxs, etc.), 
+    and merges them into batch tensors using the merge_1d and merge_2d functions for 1-dimensional and 
+    2-dimensional tensors, respectively. Finally, it returns a tuple of tensors containing the merged examples,
+    where each tensor has shape (batch_size, max_length).
+    """
     def merge_0d(scalars, dtype=torch.int64):
         return torch.tensor(scalars, dtype=dtype)
 
@@ -125,6 +160,8 @@ def collate_fn(examples):
         return padded
 
     # Group by tensor type
+    #  The zip(*examples) expression groups together the elements of examples by their position, 
+    # creating tuples of all the first elements, all the second elements, and so on. 
     context_idxs, context_char_idxs, \
         question_idxs, question_char_idxs, \
         y1s, y2s, ids = zip(*examples)
@@ -177,6 +214,12 @@ class EMA:
         model (torch.nn.Module): Model with parameters whose EMA will be kept.
         decay (float): Decay rate for exponential moving average.
     """
+    """
+    This is a class definition for an implementation of Exponential Moving Average (EMA) 
+    for the parameters of a PyTorch model. The purpose of EMA is to stabilize the parameters 
+    of a model by taking an exponentially weighted average of the model parameters across time. 
+    This can help the model to generalize better and improve its performance.
+    """
     def __init__(self, model, decay):
         self.decay = decay
         self.shadow = {}
@@ -188,6 +231,7 @@ class EMA:
                 self.shadow[name] = param.data.clone()
 
     def __call__(self, model, num_updates):
+        # Should be called after each training batch
         decay = min(self.decay, (1.0 + num_updates) / (10.0 + num_updates))
         for name, param in model.named_parameters():
             if param.requires_grad:

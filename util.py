@@ -23,6 +23,14 @@ class SQuAD(data.Dataset):
     """Stanford Question Answering Dataset (SQuAD).
 
     Each item in the dataset is a tuple with the following entries (in order):
+        - tag_idxs: indices of the POS tags in the context
+            Shape (context_len,)
+        - ent_idxs: indices of the Entity types in the context
+            Shape (context_len,)
+        - context_tfs: term frequency of the words in the context
+            Shape (context_len,)
+        - em_lowers: exact match score for each pair of question and context
+            Shape (context_len,)
         - context_idxs: Indices of the words in the context.
             Shape (context_len,).
         - context_char_idxs: Indices of the characters in the context.
@@ -37,51 +45,77 @@ class SQuAD(data.Dataset):
             -1 if no answer.
         - id: ID of the example.
 
+        npz file =
+             tag_idxs=np.array(tag_idxs),
+             ent_idxs=np.array(ent_idxs),
+             context_tfs=np.array(context_tfs),
+             em_lowers=np.array(em_lowers),
+             context_idxs=np.array(context_idxs),
+             context_char_idxs=np.array(context_char_idxs),
+             ques_idxs=np.array(ques_idxs),
+             ques_char_idxs=np.array(ques_char_idxs),
+             y1s=np.array(y1s),
+             y2s=np.array(y2s),
+             ids=np.array(ids)
+
     Args:
         data_path (str): Path to .npz file containing pre-processed dataset.
         use_v2 (bool): Whether to use SQuAD 2.0 questions. Otherwise only use SQuAD 1.1.
     """
+
     def __init__(self, data_path, use_v2=True):
         super(SQuAD, self).__init__()
 
-        # load teh dataset generated/processed by setup.py
         dataset = np.load(data_path)
+        self.tag_idxs = torch.from_numpy(dataset['tag_idxs']).long()
+        self.ent_idxs = torch.from_numpy(dataset['ent_idxs']).long()
+        self.context_tfs = torch.from_numpy(dataset['context_tfs']).long()
+        # print("TFS: ", self.context_tfs[0])
+        self.em_lowers = torch.from_numpy(dataset['em_lowers']).long()
         self.context_idxs = torch.from_numpy(dataset['context_idxs']).long()
-        self.context_char_idxs = torch.from_numpy(dataset['context_char_idxs']).long()
+        self.context_char_idxs = torch.from_numpy(
+            dataset['context_char_idxs']).long()
         self.question_idxs = torch.from_numpy(dataset['ques_idxs']).long()
-        self.question_char_idxs = torch.from_numpy(dataset['ques_char_idxs']).long()
+        self.question_char_idxs = torch.from_numpy(
+            dataset['ques_char_idxs']).long()
         self.y1s = torch.from_numpy(dataset['y1s']).long()
         self.y2s = torch.from_numpy(dataset['y2s']).long()
-
+        # print("In util, shapes: ", self.tag_idxs.shape, self.ent_idxs.shape, self.context_tfs.shape, self.em_lowers.shape, self.context_idxs.shape, self.context_char_idxs.shape, self.question_idxs.shape, self.question_char_idxs.shape)
         if use_v2:
             # SQuAD 2.0: Use index 0 for no-answer token (token 1 = OOV)
-            # Here we add the token 1 for each example to represent no-answer token
-            # It would look like this for a batch size of 2:
-            #     [[  1  23  45  67   0   0   0   0   0   0   0]
-            #     [  1  89  12  34  56  78  90   0   0   0   0]]
-
             batch_size, c_len, w_len = self.context_char_idxs.size()
             ones = torch.ones((batch_size, 1), dtype=torch.int64)
+            # print("index shapes: ", self.tag_idxs.dtype, self.context_idxs)
+            self.tag_idxs = torch.cat((ones, self.tag_idxs), dim=1)
+            self.ent_idxs = torch.cat((ones, self.ent_idxs), dim=1)
+            self.context_tfs = torch.cat((ones, self.context_tfs), dim=1)
+            self.em_lowers = torch.cat((ones, self.em_lowers), dim=1)
+
             self.context_idxs = torch.cat((ones, self.context_idxs), dim=1)
             self.question_idxs = torch.cat((ones, self.question_idxs), dim=1)
 
             ones = torch.ones((batch_size, 1, w_len), dtype=torch.int64)
-            self.context_char_idxs = torch.cat((ones, self.context_char_idxs), dim=1)
-            self.question_char_idxs = torch.cat((ones, self.question_char_idxs), dim=1)
+            self.context_char_idxs = torch.cat(
+                (ones, self.context_char_idxs), dim=1)
+            self.question_char_idxs = torch.cat(
+                (ones, self.question_char_idxs), dim=1)
 
-            # We also increament the starting and ending index of answers to account for no-answer token
             self.y1s += 1
             self.y2s += 1
+            # print("In util, V2 shapes: ", self.tag_idxs.shape, self.ent_idxs.shape, self.context_tfs.shape, self.em_lowers.shape, self.context_idxs.shape, self.context_char_idxs.shape, self.question_idxs.shape, self.question_char_idxs.shape)
 
         # SQuAD 1.1: Ignore no-answer examples
-        # We basically create SQUAD 1.1 from 2.0 by igonring non-answerable questions
         self.ids = torch.from_numpy(dataset['ids']).long()
         self.valid_idxs = [idx for idx in range(len(self.ids))
                            if use_v2 or self.y1s[idx].item() >= 0]
 
     def __getitem__(self, idx):
         idx = self.valid_idxs[idx]
-        example = (self.context_idxs[idx],
+        example = (self.tag_idxs[idx],
+                   self.ent_idxs[idx],
+                   self.context_tfs[idx],
+                   self.em_lowers[idx],
+                   self.context_idxs[idx],
                    self.context_char_idxs[idx],
                    self.question_idxs[idx],
                    self.question_char_idxs[idx],
@@ -101,81 +135,78 @@ def collate_fn(examples):
     all examples to the maximum length in the batch.
 
     Args:
-        examples (list): List of tuples of the form (context_idxs, context_char_idxs,
-        question_idxs, question_char_idxs, y1s, y2s, ids).
+        examples (list): List of tuples of the form (tag_idxs, ent_idxs, context_tfs, em_lowers, 
+        context_idxs, context_char_idxs, question_idxs, question_char_idxs, y1s, y2s, ids).
 
     Returns:
-        examples (tuple): Tuple of tensors (context_idxs, context_char_idxs, question_idxs,
-        question_char_idxs, y1s, y2s, ids). All of shape (batch_size, ...), where
+        examples (tuple): Tuple of tensors (tag_idxs, ent_idxs, context_tfs, em_lowers, context_idxs, 
+        context_char_idxs, question_idxs, question_char_idxs, y1s, y2s, ids). All of shape (batch_size, ...), where
         the remaining dimensions are the maximum length of examples in the input.
 
     Adapted from:
         https://github.com/yunjey/seq2seq-dataloader
     """
-
-    """
-    The collate_fn function is used to create batch tensors from a list of individual examples returned by the SQuAD.__getitem__ method. 
-    It merges examples of different length by padding all examples to the maximum length in the batch.
-
-    The function defines three inner functions: merge_0d, merge_1d, and merge_2d, which are used to merge tensors of different dimensions.
-
-    The merge_0d function merges 0-dimensional tensors (i.e., scalars). It takes a list of scalars, 
-    and returns a tensor of dtype torch.int64 with shape (len(scalars),) containing the values of the input scalars.
-
-    The merge_1d function merges 1-dimensional tensors. It takes a list of 1-dimensional tensors, 
-    a dtype torch.int64, and a pad_value (default 0). It computes the maximum length of the tensors 
-    in the list, and creates a tensor of shape (len(arrays), max_length) with all elements initialized 
-    to pad_value. It then fills in the tensor with the values from the input tensors up to their respective lengths, 
-    and returns the resulting tensor.
-
-    The merge_2d function merges 2-dimensional tensors. It takes a list of 2-dimensional tensors, 
-    a dtype torch.int64, and a pad_value (default 0). It computes the maximum height and width of 
-    the tensors in the list, and creates a tensor of shape (len(matrices), max_height, max_width) 
-    with all elements initialized to pad_value. It then fills in the tensor with the values from 
-    the input tensors up to their respective heights and widths, and returns the resulting tensor.
-
-    The function then groups the input examples by tensor type (i.e., context_idxs, context_char_idxs, etc.), 
-    and merges them into batch tensors using the merge_1d and merge_2d functions for 1-dimensional and 
-    2-dimensional tensors, respectively. Finally, it returns a tuple of tensors containing the merged examples,
-    where each tensor has shape (batch_size, max_length).
-    """
     def merge_0d(scalars, dtype=torch.int64):
         return torch.tensor(scalars, dtype=dtype)
 
-    def merge_1d(arrays, dtype=torch.int64, pad_value=0):
-        lengths = [(a != pad_value).sum() for a in arrays]
-        padded = torch.zeros(len(arrays), max(lengths), dtype=dtype)
-        for i, seq in enumerate(arrays):
-            end = lengths[i]
-            padded[i, :end] = seq[:end]
-        return padded
+    def merge_1d(arrays, dtype=torch.int64, pad_value=0, max_length=None):
+        if not max_length:
+            lengths = [(a != pad_value).sum() for a in arrays]
+            # print("max length: ", max(lengths))
+            max_length = max(lengths)
+            padded = torch.zeros(len(arrays), max_length, dtype=dtype)
+            for i, seq in enumerate(arrays):
+                end = lengths[i]
+                padded[i, :end] = seq[:end]
+        else:
+            padded = torch.zeros(len(arrays), max_length, dtype=dtype)
+            for i, seq in enumerate(arrays):
+                padded[i, :max_length] = seq[:max_length]
+        return max_length, padded
 
     def merge_2d(matrices, dtype=torch.int64, pad_value=0):
         heights = [(m.sum(1) != pad_value).sum() for m in matrices]
         widths = [(m.sum(0) != pad_value).sum() for m in matrices]
-        padded = torch.zeros(len(matrices), max(heights), max(widths), dtype=dtype)
+        padded = torch.zeros(len(matrices), max(
+            heights), max(widths), dtype=dtype)
         for i, seq in enumerate(matrices):
             height, width = heights[i], widths[i]
             padded[i, :height, :width] = seq[:height, :width]
         return padded
 
     # Group by tensor type
-    #  The zip(*examples) expression groups together the elements of examples by their position, 
-    # creating tuples of all the first elements, all the second elements, and so on. 
-    context_idxs, context_char_idxs, \
+    tag_idxs, ent_idxs, context_tfs, em_lowers, \
+        context_idxs, context_char_idxs, \
         question_idxs, question_char_idxs, \
         y1s, y2s, ids = zip(*examples)
+    # print("In utils, type of tag : ", len(tag_idxs), type(tag_idxs[0]), tag_idxs[0].shape)
+    # print("In utils, type of context_tfs: ", len(context_tfs), type(context_tfs[0]), context_tfs[0].shape, context_tfs[0])
 
+    # print("In utils, type of em_lowers: ", len(em_lowers), type(em_lowers[0]), em_lowers[0].shape, em_lowers[0])
+
+    # print("IN utils, merge start, shapes: ", tag_idxs.shape, ent_idxs.shape, context_tfs.shape, em_lowers.shape, context_idxs.shape, context_char_idxs.shape, question_idxs.shape, question_char_idxs.shape)
     # Merge into batch tensors
-    context_idxs = merge_1d(context_idxs)
+    # print('in utils: merging 1d, context_idxs: ', end=" ")
+    max_length, context_idxs = merge_1d(context_idxs)
+    # print('in utils: merging 1d, tag_idxs: ', end=" ")
+    _, tag_idxs = merge_1d(tag_idxs, max_length=max_length)
+    # print("tag ids: ", type(tag_idxs), len(tag_idxs))
+    # print('in utils: merging 1d, ent_idxs: ', end=" ")
+    _, ent_idxs = merge_1d(ent_idxs, max_length=max_length)
+    _, context_tfs = merge_1d(
+        context_tfs, max_length=max_length, dtype=torch.float64)
+    _, em_lowers = merge_1d(em_lowers, max_length=max_length)
+    # print('in utils: merging 1d, context_idxs: ', end=" ")
+    # context_idxs = merge_1d(context_idxs)
     context_char_idxs = merge_2d(context_char_idxs)
-    question_idxs = merge_1d(question_idxs)
+    # print('in utils: merging 1d, questions_idxs: ', end=" ")
+    _, question_idxs = merge_1d(question_idxs)
     question_char_idxs = merge_2d(question_char_idxs)
     y1s = merge_0d(y1s)
     y2s = merge_0d(y2s)
     ids = merge_0d(ids)
-
-    return (context_idxs, context_char_idxs,
+    # print("In utils, after merging: ", tag_idxs.shape, ent_idxs.shape, context_tfs.shape, em_lowers.shape, context_idxs.shape, context_char_idxs.shape, question_idxs.shape, question_char_idxs.shape)
+    return (tag_idxs, ent_idxs, context_tfs, em_lowers, context_idxs, context_char_idxs,
             question_idxs, question_char_idxs,
             y1s, y2s, ids)
 
@@ -186,6 +217,7 @@ class AverageMeter:
     Adapted from:
         > https://github.com/pytorch/examples/blob/master/imagenet/main.py
     """
+
     def __init__(self):
         self.avg = 0
         self.sum = 0
@@ -214,12 +246,7 @@ class EMA:
         model (torch.nn.Module): Model with parameters whose EMA will be kept.
         decay (float): Decay rate for exponential moving average.
     """
-    """
-    This is a class definition for an implementation of Exponential Moving Average (EMA) 
-    for the parameters of a PyTorch model. The purpose of EMA is to stabilize the parameters 
-    of a model by taking an exponentially weighted average of the model parameters across time. 
-    This can help the model to generalize better and improve its performance.
-    """
+
     def __init__(self, model, decay):
         self.decay = decay
         self.shadow = {}
@@ -231,7 +258,6 @@ class EMA:
                 self.shadow[name] = param.data.clone()
 
     def __call__(self, model, num_updates):
-        # Should be called after each training batch
         decay = min(self.decay, (1.0 + num_updates) / (10.0 + num_updates))
         for name, param in model.named_parameters():
             if param.requires_grad:
@@ -281,6 +307,7 @@ class CheckpointSaver:
             minimizes the metric.
         log (logging.Logger): Optional logger for printing information.
     """
+
     def __init__(self, save_dir, max_checkpoints, metric_name,
                  maximize_metric=False, log=None):
         super(CheckpointSaver, self).__init__()
@@ -292,7 +319,8 @@ class CheckpointSaver:
         self.best_val = None
         self.ckpt_paths = queue.PriorityQueue()
         self.log = log
-        self._print(f"Saver will {'max' if maximize_metric else 'min'}imize {metric_name}...")
+        self._print(
+            f"Saver will {'max' if maximize_metric else 'min'}imize {metric_name}...")
 
     def is_best(self, metric_val):
         """Check whether `metric_val` is the best seen so far.
@@ -446,7 +474,8 @@ def visualize(tbx, pred_dict, eval_path, step, split, num_visuals):
     if num_visuals > len(pred_dict):
         num_visuals = len(pred_dict)
 
-    visual_ids = np.random.choice(list(pred_dict), size=num_visuals, replace=False)
+    visual_ids = np.random.choice(
+        list(pred_dict), size=num_visuals, replace=False)
 
     with open(eval_path, 'r') as eval_file:
         eval_dict = json.load(eval_file)
@@ -535,6 +564,7 @@ def get_logger(log_dir, name):
         See Also:
             > https://stackoverflow.com/questions/38543506
         """
+
         def emit(self, record):
             try:
                 msg = self.format(record)
@@ -702,8 +732,10 @@ def eval_dicts(gold_dict, pred_dict, no_answer):
         total += 1
         ground_truths = gold_dict[key]['answers']
         prediction = value
-        em += metric_max_over_ground_truths(compute_em, prediction, ground_truths)
-        f1 += metric_max_over_ground_truths(compute_f1, prediction, ground_truths)
+        em += metric_max_over_ground_truths(compute_em,
+                                            prediction, ground_truths)
+        f1 += metric_max_over_ground_truths(compute_f1,
+                                            prediction, ground_truths)
         if no_answer:
             avna += compute_avna(prediction, ground_truths)
 
